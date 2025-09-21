@@ -1,0 +1,71 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  SNYK_TOKEN: $(SNYK_TOKEN)
+  STAGING_URL: 'https://seu-url-staging.com'
+
+stages:
+  - stage: Build
+    displayName: 'Build & Test'
+    jobs:
+      - job: BuildAndUnitTests
+        displayName: 'Build + Unit Tests'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '18.x'
+            displayName: 'Use Node.js 18.x'
+          - script: npm install
+            displayName: 'Instalar dependências'
+          - script: npm test
+            displayName: 'Rodar testes unitários'
+
+  - stage: Security
+    displayName: 'Security Checks'
+    dependsOn: Build
+    jobs:
+      - job: SAST
+        displayName: 'Static Analysis (SAST)'
+        steps:
+          - script: |
+              npm install -g semgrep
+              semgrep --config auto .
+            displayName: 'Run Semgrep'
+
+      - job: SCA
+        displayName: 'Dependency Analysis (SCA)'
+        dependsOn: SAST
+        steps:
+          - task: SnykSecurityScan@1
+            inputs:
+              serviceConnectionEndpoint: 'Snyk-ServiceConnection'
+              command: 'test'
+            env:
+              SNYK_TOKEN: $(SNYK_TOKEN)
+            displayName: 'Run Snyk Test'
+
+      - job: DAST
+        displayName: 'Dynamic Testing (DAST)'
+        dependsOn: SCA
+        steps:
+          - script: |
+              docker run --rm owasp/zap2docker-stable zap-baseline.py \
+              -t $(STAGING_URL) -r zap-report.html
+            displayName: 'Run OWASP ZAP scan'
+          - publish: zap-report.html
+            artifact: zap-report
+
+  - stage: DeployStaging
+    displayName: 'Deploy to Staging'
+    dependsOn: Security
+    jobs:
+      - job: DeployJob
+        steps:
+          - script: echo "Deploy para Staging..."
